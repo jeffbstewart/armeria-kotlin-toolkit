@@ -94,6 +94,38 @@ See [`codegen/README.md`](codegen/README.md) for the full
 `.proto` → Kotlin + TypeScript pipeline, including the CI job that
 makes contract drift a build failure.
 
+## Auth bridge (optional module)
+
+`armeria-kotlin-toolkit-auth` wires
+[auth-kotlin-toolkit](https://github.com/jeffbstewart/auth-kotlin-toolkit)
+into this server: a gRPC `AuthGrpcInterceptor` (Bearer JWT, then
+HttpOnly session cookie with an Origin-based CSRF gate; unauthenticated
+method allowlist; pluggable per-user gate for roles/policy) and an HTTP
+`AuthHttpDecorator` (cookie, then Bearer, then app-supplied extra
+resolvers such as device tokens; 401/403; pluggable gate). Handlers
+read the identity via `currentAuthUser()` (gRPC) or `authUser(ctx)`
+(HTTP).
+
+```kotlin
+val grpcAuth = AuthGrpcInterceptor(grpcAuthConfig(
+    sessionService = sessions,
+    jwtService = jwt,
+    unauthenticatedMethods = setOf("finance.AuthService/Login"),
+    gate = { user, method ->
+        if (method.startsWith("finance.AdminService/") && !user.isAdmin())
+            Status.PERMISSION_DENIED.withDescription("Admin access required")
+        else null
+    },
+))
+val httpAuth = AuthHttpDecorator(httpAuthConfig(
+    sessionService = sessions, jwtService = jwt, userRepository = users,
+))
+```
+
+Identity resolution is lambda-based under the hood, so tests need no
+database. The module expects `auth-kotlin-toolkit` checked out as a
+sibling directory (composite build) or published to mavenLocal.
+
 ## License
 
 MIT. Includes code derived from

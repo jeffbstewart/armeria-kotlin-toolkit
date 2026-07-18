@@ -11,14 +11,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: armeria-kotlin-toolkit
+      # The auth bridge module composes with the sibling toolkit via
+      # composite build — the family convention is sibling checkouts.
+      - uses: actions/checkout@v4
+        with:
+          repository: jeffbstewart/auth-kotlin-toolkit
+          path: auth-kotlin-toolkit
       - uses: actions/setup-java@v4
         with:
           distribution: corretto
           java-version: '25'
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew build --no-daemon
+        working-directory: armeria-kotlin-toolkit
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: test-reports
-          path: build/reports/tests/
+          path: armeria-kotlin-toolkit/**/build/reports/tests/

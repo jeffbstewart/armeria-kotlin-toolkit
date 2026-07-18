@@ -1,0 +1,20 @@
+// Test-only service exercising the same protoc → grpc-java → grpc-kotlin
+// toolchain documented in codegen/README.md.
+syntax = "proto3";
+
+package net.stewart.armeria.test;
+
+option java_package = "net.stewart.armeria.testproto";
+option java_multiple_files = true;
+
+message EchoRequest {
+  string message = 1;
+}
+
+message EchoReply {
+  string message = 1;
+}
+
+service Echo {
+  rpc Say(EchoRequest) returns (EchoReply);
+}

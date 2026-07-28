@@ -1,33 +1,55 @@
-name: CI
+# The presubmit suite (cloister docs/grange.md R3): the "verify" check
+# the main ruleset requires.  Zero secrets by policy (R6) — the forge
+# lint audits Actions secrets to empty.
+name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  push:
     branches: [main]
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           path: armeria-kotlin-toolkit
-      # The auth bridge module composes with the sibling toolkit via
-      # composite build — the family convention is sibling checkouts.
+
+      # The auth bridge module composes with the sibling auth-kotlin-toolkit
+      # via composite build (see settings.gradle.kts) — the family
+      # convention is sibling checkouts.
       - uses: actions/checkout@v4
         with:
           repository: jeffbstewart/auth-kotlin-toolkit
           path: auth-kotlin-toolkit
+
+      # The wrapper jar is a binary a PR review cannot read; validate it
+      # against Gradle's published checksums so a swapped jar fails here.
+      - uses: gradle/actions/wrapper-validation@v4
+
       - uses: actions/setup-java@v4
         with:
-          distribution: corretto
-          java-version: '25'
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew build --no-daemon
+          distribution: temurin
+          java-version: 21
+
+      - name: Build and test
+        run: ./gradlew --no-daemon build
         working-directory: armeria-kotlin-toolkit
-      - uses: actions/upload-artifact@v4
-        if: failure()
+
+      # The forge's own merge-path protections (cloister docs/grange.md
+      # R1-R8), asserted against this repo's pinned expectations.  The
+      # workflow token cannot read collaborator roles or Actions secrets,
+      # so those report UNVERIFIED (-allow-unverified downgrades them to
+      # warnings); the operator runs the same lint with an admin token
+      # for the full verdict.  Any readable rule that drifts still fails
+      # the PR.
+      - uses: actions/setup-go@v5
         with:
-          name: test-reports
-          path: armeria-kotlin-toolkit/**/build/reports/tests/
+          go-version: stable
+
+      - name: Forge lint (merge-path protections)
+        env:
+          FORGE_LINT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run github.com/jeffbstewart/cloister/cmd/forge-lint@main -config .github/forge-lint.yaml -allow-unverified
+        working-directory: armeria-kotlin-toolkit

@@ -141,6 +141,46 @@ class AuthGrpcInterceptorTest {
     }
 
     @Test
+    fun `null call authority falls back to the Armeria request context`() {
+        // Armeria's gRPC bridge returns null from ServerCall.getAuthority
+        // (most visibly on the gRPC-Web path browsers use). The
+        // interceptor must recover the authority from the Armeria
+        // request context or every cookie-authenticated browser RPC
+        // fails the fail-closed Origin check.
+        val call = FakeCall("pkg.Svc/Do", authorityValue = null)
+        val handler = RecordingHandler()
+        val request = com.linecorp.armeria.common.HttpRequest.of(
+            com.linecorp.armeria.common.RequestHeaders.of(
+                com.linecorp.armeria.common.HttpMethod.POST, "/pkg.Svc/Do",
+                com.linecorp.armeria.common.HttpHeaderNames.AUTHORITY, "example.com:8443",
+            )
+        )
+        val ctx = com.linecorp.armeria.server.ServiceRequestContext.of(request)
+        ctx.push().use {
+            interceptor().interceptCall(
+                call,
+                metadata("cookie" to "session=good-cookie", "origin" to "https://example.com"),
+                handler,
+            )
+        }
+        assertNull(call.closedStatus)
+        assertTrue(handler.called)
+    }
+
+    @Test
+    fun `null authority with no context still fails closed on origin`() {
+        val call = FakeCall("pkg.Svc/Do", authorityValue = null)
+        val handler = RecordingHandler()
+        interceptor().interceptCall(
+            call,
+            metadata("cookie" to "session=good-cookie", "origin" to "https://example.com"),
+            handler,
+        )
+        assertEquals(Status.Code.UNAUTHENTICATED, call.closedStatus?.code)
+        assertFalse(handler.called)
+    }
+
+    @Test
     fun `unauthenticated methods skip auth`() {
         val call = FakeCall("pkg.Auth/Login")
         val handler = RecordingHandler()

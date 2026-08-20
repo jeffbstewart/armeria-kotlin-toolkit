@@ -1,5 +1,6 @@
 package net.stewart.armeria.auth
 
+import com.linecorp.armeria.server.ServiceRequestContext
 import io.grpc.Context
 import io.grpc.Contexts
 import io.grpc.Metadata
@@ -11,6 +12,17 @@ import net.stewart.auth.AuthUser
 import net.stewart.auth.JwtService
 import net.stewart.auth.SessionService
 import org.slf4j.LoggerFactory
+
+/**
+ * The request authority (Host) for a server call. Armeria's gRPC
+ * bridge returns null from [ServerCall.getAuthority] — most visibly on
+ * the gRPC-Web path browsers use — which would make the Origin CSRF
+ * check fail closed on every cookie-authenticated browser RPC. Fall
+ * back to the Armeria request context, which always knows the
+ * authority the request was addressed to.
+ */
+fun requestAuthority(call: ServerCall<*, *>): String? =
+    call.authority ?: ServiceRequestContext.currentOrNull()?.request()?.authority()
 
 /**
  * Configuration for [AuthGrpcInterceptor]. Identity resolution is
@@ -81,9 +93,10 @@ class AuthGrpcInterceptor(private val config: GrpcAuthConfig) : ServerIntercepto
             return next.startCall(call, headers)
         }
 
-        val user = resolveBearer(headers) ?: resolveCookie(headers, call.authority)
+        val authority = requestAuthority(call)
+        val user = resolveBearer(headers) ?: resolveCookie(headers, authority)
         if (user == null) {
-            logAuthFailure(method, headers, call.authority)
+            logAuthFailure(method, headers, authority)
             call.close(
                 Status.UNAUTHENTICATED.withDescription("Missing or invalid credentials"),
                 Metadata()

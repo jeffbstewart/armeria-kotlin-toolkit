@@ -101,7 +101,8 @@ makes contract drift a build failure.
 into this server: a gRPC `AuthGrpcInterceptor` (Bearer JWT, then
 HttpOnly session cookie with an Origin-based CSRF gate; unauthenticated
 method allowlist; pluggable per-user gate for roles/policy) and an HTTP
-`AuthHttpDecorator` (cookie, then Bearer, then app-supplied extra
+`AuthHttpDecorator` (cookie, with the same Origin CSRF gate on
+state-changing methods, then Bearer, then app-supplied extra
 resolvers such as device tokens; 401/403; pluggable gate). Handlers
 read the identity via `currentAuthUser()` (gRPC) or `authUser(ctx)`
 (HTTP).

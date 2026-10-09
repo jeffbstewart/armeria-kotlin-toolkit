@@ -5,6 +5,7 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.server.ServiceRequestContext
 import com.linecorp.armeria.server.annotation.Get
+import com.linecorp.armeria.server.annotation.Post
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,6 +19,9 @@ internal class WhoAmIService {
         val user = authUser(ctx) ?: return "nobody"
         return "${user.username}/${ctx.attr(HTTP_AUTH_METHOD_KEY)}"
     }
+
+    @Post("/whoami")
+    fun whoamiPost(ctx: ServiceRequestContext): String = whoami(ctx)
 }
 
 /** End-to-end decorator tests through a real [ArmeriaAppServer]. */
@@ -67,6 +71,74 @@ class AuthHttpDecoratorTest {
             .execute().aggregate().join()
         assertEquals(HttpStatus.OK, res.status())
         assertEquals("alice/cookie", res.contentUtf8())
+    }
+
+    // --- Cookie CSRF (Origin) gate on state-changing methods ---
+
+    private fun postWithCookie(client: WebClient, origin: String?, vararg extra: Pair<String, String>) =
+        client.prepare().post("/whoami")
+            .header("cookie", "session=good-cookie")
+            .apply { if (origin != null) header("origin", origin) }
+            .apply { extra.forEach { (k, v) -> header(k, v) } }
+            .content(com.linecorp.armeria.common.MediaType.JSON, "{}")
+            .execute().aggregate().join()
+
+    private fun sameOrigin() = "http://127.0.0.1:${server!!.activePort()}"
+
+    @Test
+    fun `cookie POST with cross-site Origin is rejected`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, "https://evil.example.net")
+        assertEquals(HttpStatus.UNAUTHORIZED, res.status())
+    }
+
+    @Test
+    fun `cookie POST from a sibling subdomain is rejected`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, "https://other.127.0.0.1")
+        assertEquals(HttpStatus.UNAUTHORIZED, res.status())
+    }
+
+    @Test
+    fun `cookie POST with opaque null Origin is rejected`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, "null")
+        assertEquals(HttpStatus.UNAUTHORIZED, res.status())
+    }
+
+    @Test
+    fun `cookie POST with matching Origin is allowed`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, sameOrigin())
+        assertEquals(HttpStatus.OK, res.status())
+        assertEquals("alice/cookie", res.contentUtf8())
+    }
+
+    @Test
+    fun `cookie POST without Origin is allowed`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, null)
+        assertEquals(HttpStatus.OK, res.status())
+        assertEquals("alice/cookie", res.contentUtf8())
+    }
+
+    @Test
+    fun `cookie GET with cross-site Origin is allowed for safe methods`() {
+        val client = startServer(baseConfig())
+        val res = client.prepare().get("/whoami")
+            .header("cookie", "session=good-cookie")
+            .header("origin", "https://evil.example.net")
+            .execute().aggregate().join()
+        assertEquals(HttpStatus.OK, res.status())
+        assertEquals("alice/cookie", res.contentUtf8())
+    }
+
+    @Test
+    fun `bearer still authenticates when a cross-site cookie is rejected`() {
+        val client = startServer(baseConfig())
+        val res = postWithCookie(client, "https://evil.example.net", "authorization" to "Bearer good-jwt")
+        assertEquals(HttpStatus.OK, res.status())
+        assertEquals("alice/bearer", res.contentUtf8())
     }
 
     @Test

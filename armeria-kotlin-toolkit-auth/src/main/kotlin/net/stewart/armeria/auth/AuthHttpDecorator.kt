@@ -1,5 +1,7 @@
 package net.stewart.armeria.auth
 
+import com.linecorp.armeria.common.HttpHeaderNames
+import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
@@ -10,6 +12,7 @@ import net.stewart.auth.AuthUser
 import net.stewart.auth.JwtService
 import net.stewart.auth.SessionService
 import net.stewart.auth.UserRepository
+import org.slf4j.LoggerFactory
 
 /**
  * Configuration for [AuthHttpDecorator]. Identity resolution is
@@ -61,7 +64,9 @@ fun httpAuthConfig(
  * the request context ([HTTP_AUTH_USER_KEY], read via [authUser]) along
  * with the method name that succeeded ([HTTP_AUTH_METHOD_KEY]).
  * Unauthenticated requests get 401; pre-setup requests (no users yet)
- * get 403.
+ * get 403. On state-changing methods the session cookie is only honored
+ * when the `Origin` header (if present) matches the request authority —
+ * the same CSRF gate the gRPC interceptor applies.
  *
  * Extracted from MediaManager's ArmeriaAuthDecorator (MIT, same
  * copyright holder), with device tokens and legal gates generalized
@@ -84,7 +89,7 @@ class AuthHttpDecorator(private val config: HttpAuthConfig) : DecoratingHttpServ
         val cookieAuth = config.cookieAuthenticator
         if (cookieAuth != null) {
             val cookie = req.headers().cookies().firstOrNull { it.name() == config.cookieName }
-            if (cookie != null) {
+            if (cookie != null && cookieOriginPermitted(req)) {
                 user = cookieAuth(cookie.value())
                 if (user != null) method = "cookie"
             }
@@ -119,5 +124,26 @@ class AuthHttpDecorator(private val config: HttpAuthConfig) : DecoratingHttpServ
         config.gate?.invoke(user, ctx)?.let { return it }
 
         return delegate.serve(ctx, req)
+    }
+
+    /**
+     * CSRF gate for the cookie path, mirroring [AuthGrpcInterceptor]: on a
+     * state-changing method, an `Origin` header (when present) must match the
+     * request authority or the cookie is ignored. SameSite=Lax alone does not
+     * stop same-site (sibling subdomain) origins from sending simple POSTs.
+     * Safe methods are exempt so cross-origin image/media loads keep working.
+     */
+    private fun cookieOriginPermitted(req: HttpRequest): Boolean {
+        if (req.method() in SAFE_METHODS) return true
+        val origin = req.headers().get(HttpHeaderNames.ORIGIN)
+        val authority = req.headers().authority()
+        if (OriginCheck.originPermitted(origin, authority)) return true
+        log.warn("Cookie auth denied for {} — Origin {} does not match authority {}", req.method(), origin, authority)
+        return false
+    }
+
+    private companion object {
+        val log = LoggerFactory.getLogger(AuthHttpDecorator::class.java)
+        val SAFE_METHODS = setOf(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.OPTIONS, HttpMethod.TRACE)
     }
 }
